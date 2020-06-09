@@ -44,7 +44,7 @@ input_spreadsheet = r'C:\Temp\Random_Field_Selection.xlxs'
 df_pvid = pandas.read_excel(input_spreadsheet, sheet_name = 'USBR INSP FALLOW 12-2019 ', skiprows = 5, converters = {'Unnamed: 2':str, ' # South':str, '# East': str, 'Unnamed: 10':int})
 
 # Rename columns
-df_pvid.columns = ['field_id', 'farm_id', 'section', 'township', 'range', 'acct_id', 'parcel_id', 'qualified_acres', 'parcel_id', 'canal_gate', 'fallowed_acreage', 'special_location', 'zip_code', 'blank', 'date_fallowed', 'duration_fallowed']
+df_pvid.columns = ['unique_id','field_id', 'farm_id', 'section', 'township', 'range', 'acct_id', 'parcel_id', 'qualified_acres', 'assessor_id', 'canal_gate', 'fallowed_acreage', 'special_location', 'zip_code', 'blank', 'date_fallowed', 'duration_fallowed']
 
 # Remove null rows and erroneous sum row
 df_pvid = df_pvid[pandas.notnull(df_pvid['farm_id'])]
@@ -55,16 +55,14 @@ total_acreage = df_pvid['fallowed_acreage'].sum()
 # Calculate target acreage at 5% of total acreage
 target_acreage = total_acreage * 0.05
 
-# Run multiple iterations of random selection of fields until a selection meeting the desired acreage and number of fields as produced
-
+# Run multiple iterations of random selection of fields until a selection meeting the desired acreage is met and number of fields to visit is within proper range
 number_fields_selected = 0
 acreage_selected = 0.0
 
-#while number_fields_selected == 0 or number_fields_selected > 30 or number_fields_selected < 25 or acreage_selected < target_acreage:
 while number_fields_selected == 0 or number_fields_selected > 30 or number_fields_selected < 25:
 
     # 2. Create new data frame from slice of master data frame 
-    df_random = df_pvid[['field_id', 'section', 'fallowed_acreage']]
+    df_random = df_pvid[['unique_id','field_id', 'section', 'fallowed_acreage']]
     
     # # 3. If you wish to collapse rows by field_id (i.e. remove duplicates) but combine acreage, uncomment this section
     # df_random = df_random.groupby(['field_id'], as_index = False).agg({'section': 'first', 'fallowed_acreage': 'sum'})
@@ -90,7 +88,7 @@ while number_fields_selected == 0 or number_fields_selected > 30 or number_field
             if acreage_selected < target_acreage:
                 if df_random.at[i, 'section'] == s and df_random.at[i, 'field_id'] not in fields_selected and df_random.at[i, 'section'] not in sections_selected and df_random.at[i, 'fallowed_acreage'] >= 5:
                     acreage_selected += df_random.at[i, 'fallowed_acreage']
-                    fields_selected.append(df_random.at[i, 'field_id'])
+                    fields_selected.append(df_random.at[i, 'unique_id'])
                     sections_selected.append(df_random.at[i, 'section'])
                 
     print(acreage_selected)
@@ -100,12 +98,10 @@ while number_fields_selected == 0 or number_fields_selected > 30 or number_field
     print(number_fields_selected)
 
 # 6. Create a subset of original data frame with only those rows corresponding to selected fields
-df_selected = df_pvid[df_pvid['field_id'].isin(fields_selected)]
-df_selected
+df_selected = df_pvid[df_pvid['unique_id'].isin(fields_selected)]
 
 # 8. Reset index of data frame to field_id
-df_selected.set_index('field_id', inplace = True)
-df_selected
+df_selected.set_index('unique_id', inplace = True)
 
 # 7. Write data frame to original Excel file 
 
@@ -124,4 +120,5 @@ if os.path.isfile(input_spreadsheet):
 
 else:
     df_selected.to_excel(excel_writer = r'C:\Temp\Random_Field_Selection.xlxs', sheet_name = 'Selected_Fields')
+
 
