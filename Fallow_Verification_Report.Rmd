@@ -1,0 +1,888 @@
+---
+title: '**Fallowing Verification Report**'
+subtitle: |
+  | `r params$sub1`
+  | `r params$sub2`
+header-includes:
+- \usepackage{pdflscape}
+- \newcommand{\blandscape}{\begin{landscape}}
+- \newcommand{\elandscape}{\end{landscape}}
+- \usepackage[skip=1pt]{caption} 
+- \usepackage{fancyhdr}
+- \usepackage{lastpage}
+
+author: "`r params$report_author`"
+
+date: "`r format(Sys.time(), '%B %d,  %Y')`"
+
+geometry: margin=1cm
+
+output:
+  rmarkdown::pdf_document:
+    fig_caption: yes        
+    includes:  
+      in_header: my_header.tex
+      
+params:
+  area_of_interest: ''
+  area_name: ''
+  sub1: ''
+  sub2: ''
+  report_author: ''
+  imagery_directory: ''
+  shp_program: ''
+  identifier: ''
+  list_shp_ground: 
+    value: ''
+    choices:
+    - ''
+    - ''
+    - ''
+    input: select
+    multiple: yes
+  epsg: 32611
+---
+<!--- Define Headers and Footers --->
+\fancypagestyle{plain}{%
+  \renewcommand{\headrulewidth}{0pt}%
+  \fancyhf{}%
+  \fancyfoot[R]{\footnotesize Page \thepage\, of\, \pageref*{LastPage}}
+  \setlength\footskip{0pt}
+}
+\pagestyle{plain}
+
+<!-- 
+
+Parameters:
+  area_of_interest: Name of area of interest (should be one word, perhaps acronym)
+  area_name: Name of general area from which ground truth samples were collected from
+  sub1: Text of first line of subtitle for report
+  sub2: Text of first line of subtitle for report
+  imagery_directory: Path/to/directory/with/Sentinel-2/imagery
+  shp_program: Path/to/shapefile/of/program/fallow/fields
+  identifier: name of attribute table field within shp_program that is the unique identifier of fields
+  list_shp_ground: Path/to/shapefile/of/ground/truth/fields
+    value: one must be at least on listed here
+    choices: 
+    input: select
+    multiple: yes
+  epsg: EPSG code to which data will be re-projected to
+  
+Requirements:
+  - my_header.tex should be saved in same directory as this script
+  - Fallow_Verification_Internal_Knit_Parameters_and_Text.Rmd should be saved in same directory as this script; it should contain markdown text for first page of report
+  - Assumes images are: 1) Sentinel images, 2) with the following four bands only: blue, green, red, nir, 3) with nomenclature  S2_MSIL1C_YYYYMMDD_Rxxx_Txxxxx_Bx_.img, and 4) with .img extension
+  - Imagery set to accept composited sentinel rasters with the following two nomenclature requirements:
+      - must be IMAGiNE raster with .img extension
+      - third delimited section of name should me eight digits in the form of YYYYMMDD 
+  - This script uses all .img files stored in the Images Directory; therefore, move any to be excluded from this analysis elsewhere
+  - User must alter:
+    - code chunk 14 to match each image with a ground truth shapefile 
+
+How to run render this report:
+  Option 1: Click Knit drop-down arrow > Knit with Parameters
+  Option 2: Edit last chunk with render statement with list of parameters; for example, render doc.Rmd with parameters n and d:
+    render("doc.Rmd", params = list(n = 1, d = as.Date("2015-01-01")))
+
+-->
+
+
+
+```{r test, child = "Fallow_Verification_Internal_Knit_Parameters_and_Text.Rmd", eval=TRUE}
+
+# 0. Read in report text from separate RMarkdown document
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 1. Install required packages if not already installed and load packages
+
+# Make list of necessary packages
+packages_needed <- c('raster', 'ggplot2', 'rmarkdown', 'knitr', 'magrittr', 'RStoolbox','dplyr', 'ggrepel', 'tidyr', 'kableExtra', 'ggspatial', 'gghighlight', 'sf','rstudioapi')
+
+# Create function for installing and loading multiple R packages(source: https://gist.github.com/stevenworthington/3178163)
+ 
+install_and_load_packgages <- function(packages){
+  new_packages <- packages[!(packages %in% installed.packages()[, 'Package'])]
+  
+  if (length(new_packages))
+    install.packages(new_packages, dependencies = TRUE)
+  sapply(X = packages, FUN = library, character.only = TRUE)                   
+}
+
+# Install and load packages
+install_and_load_packgages(packages = packages_needed)
+
+```
+
+
+```{r "setup", eval = TRUE, include = FALSE, results = 'hide'}
+
+# 2. Configure knitr setup chunk
+
+# Set default for all chunks to always print figure caption
+knitr::opts_chunk$set(fig_caption = TRUE)
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 4. Create dataframe lookup table of crop number (key) to name
+
+# OUTPUTS: df_crop_key
+
+#--------------------------------------------------------------------------------
+
+# Create vector of all possible crop numbers
+crop_code <- c(100, 200, 400, 401, 402, 403, 404, 405, 500, 501, 502, 503, 600, 601, 602, 603, 604, 605, 606, 700, 701, 702, 703, 704, 705, 706, 800, 801, 802, 803, 804, 806, 1000, 1100, 1103, 1104, 1200, 1201, 1202, 1203, 1204, 1205, 1206, 1207, 1208, 1300, 1301, 1302, 1303, 1304, 1305, 1306, 1307, 1400, 1402, 1403, 1600, 1601, 1602, 1603, 1604, 1800, 1801, 1802, 1803, 1804, 1805, 1806, 1807, 1808, 1809, 1900, 1901, 1902, 1903, 2000, 2001, 2100, 3400, 3401, 3402, 3403, 3404)
+
+# Create vector of all crop names in corresponding order to crop_code
+crop_name <- c('Alfalfa', 'Cotton', 'Small Grains', 'Oats', 'Rye', 'Barley', 'Millet', 'Wheat', 'Field Grain', 'Corn', 'Sorghum', 'Milo', 'Lettuce', 'Head Lettuce', 'Green Leaf Lettuce', 'Red Leaf Lettuce', 'Spinach', 'Other Lettuce', 'Chard', 'Melons', 'Watermelon', 'Honeydew', 'Cantaloupe', 'Squash', 'Strawberries', 'Cucumbers', 'Bermuda/Rye', 'Bermuda', 'Bermuda with Rye', 'Klein', 'Timothy', 'Fallowed Bermuda', 'Tomatoes', 'Sudan', 'Sesbania', 'Clover', 'Legume', 'Green Beans', 'Dry Beans', 'Garbonzo Beans', 'Peas', 'Peanuts', 'Peppers', 'Potatoes', 'Egglant', 'Crucifers', 'Broccoli', 'Cauliflower', 'Cabbage', 'Boy-choy', 'Mustard', 'Kale', 'Okra', 'Fallow', 'Fallow', 'Fallow', 'Oil Crops', 'Safflower', 'Canola', 'Sunflower', 'Sesame', 'Small Vegetables', 'Carrots', 'Cilantro', 'Celery', 'Garlic', 'Onions', 'Scallions', 'Parsley', 'Radishes', 'Commercial Flowers', 'Root Vegetables', 'Beets', 'Parsnip', 'Turnip and Rutabaga', 'Perennial Vegetables', 'Artichokes', 'Sugar Beets', 'Miscellaneous Herbs', 'Anise', 'Mint', 'Basil', 'Other Herb') 
+
+# Make dataframe from vectors
+df_crop_key <- data.frame(crop_code, crop_name)
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, results = 'hide'}
+
+# 5. Read in both Program Fallow and Ground Truth shapefile feature classes and generate a reprojecetd simple feature access for each
+
+# OUTPUTS: sf_program_fallow, sfs_lcras_data
+
+#--------------------------------------------------------------------------------
+
+# Convert to upper the identifier string variable (column name of the field within Program Fallow Fields Shapefile that serves as a unique identifier) 
+identifier_upper <- toupper(params$identifier)
+
+# Create reprojected simple feature of Program Fallow Fields; set column names to caps and rename column serving as unique identifier
+sf_program_fallow <- params$shp_program %>% sf::st_read() %>% sf::st_transform(crs = params$epsg) %>% dplyr::rename_all(toupper) %>% dplyr::rename(FIELD_ID = !!as.name(identifier_upper))
+
+# Add ID column with unique numbers to attribute table field to Program Fallow Fields simple feature; this column is used to label fields on maps since field ids are too long; add FIELD_KEY column (serving as key for cir map legends) with concatenated value of ID (row number) followed by FIELD_ID; set FIELD_KEY as factor so legend is ordered
+sf_program_fallow <- sf_program_fallow %>% dplyr::mutate(ID = as.numeric(rownames(.))) %>%  dplyr::mutate(FIELD_KEY = ifelse(ID < 10, paste0('   ', ID, '   ', FIELD_ID), ifelse(ID < 100, paste0(' ', ID, '   ', FIELD_ID), paste0(ID, '   ', FIELD_ID))), FIELD_KEY = factor(FIELD_KEY, levels = FIELD_KEY))
+
+#--------------------------------------------------------------------------------
+
+# Create function to create simple features data frame, reproject it, and set all column names to upper case
+read_and_reproject <- function(X){
+  X %>% sf::st_read() %>% sf::st_transform(crs = params$epsg) %>% dplyr::rename_all(toupper)
+}
+
+# Create list of resultant reprojected data frames
+sfs_lcras_data <- lapply(X = params$list_shp_ground, FUN = read_and_reproject)
+
+# Create function to create list of names of files without file extensions
+extract_basename <- function(X){
+  X %>% basename() %>% tools::file_path_sans_ext()
+}
+
+# Create list of names 
+list_shapefile_names <- lapply(X = params$list_shp_ground, FUN = extract_basename)
+
+# Assign names to elements of Ground Trunth data frame list
+names(sfs_lcras_data) <- list_shapefile_names
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# 6. Subset Ground Truth data
+
+# TO RERUN: Review dplyr::filter where clause within extract_ground_truth function
+
+# OUTPUTS: the following are all lists containing simple features for each time period coverd by the analysis:
+  # 1) sfs_ground_truth (Ground Truth Fields subset from raw LCRAS data) 
+  # 2) sfs_overlap_fields (simple feature of fields that are both Ground Truth Fields as well as Program Fallow Fields)
+  # 3) sfs_ground_data (final Ground Truth Fields that were not Program Fallow fields)
+
+#--------------------------------------------------------------------------------
+
+# Create function to convert CROP_TYPE variable to numeric and subset Ground Truth data frames to include those where CLASS is not 0, CLASS is not 2, and CROP_TYPE > 10000
+extract_ground_truth <- function(X){
+  # Filter raw LCRAS data to only include Ground Truth fields (by excluding CLASS 0, CLASS 2, and CROP_TYPE > 10000 [fields not visited due to COVID])
+  X %>% dplyr::filter(CLASS != 0 & CLASS != 2 & CROP_TYPE < 10000)
+} 
+
+sfs_ground_truth <- lapply(X = sfs_lcras_data, FUN = extract_ground_truth)
+
+#--------------------------------------------------------------------------------
+
+# Create function to identify overlapping
+identify_overlaps <- function(X){
+  # Generate simple features of Ground Truth fields that overlap with Program Fallow fields
+  sf::st_intersection(X, sf_program_fallow)
+}
+
+sfs_overlap_fields <- lapply(X = sfs_ground_truth, FUN = identify_overlaps)
+
+#--------------------------------------------------------------------------------
+
+# Create function to remove Program Fallow fields from Ground Truth sample
+remove_overlaps <- function(ground_input, overlap_input){
+  # Filter Ground Truth data to exclude those with FIELD_IDs matching those of overlapping fields
+  ground_input %>% dplyr::filter(!FIELD_ID %in% overlap_input$FIELD_ID)
+}
+
+sfs_ground_data <- mapply(FUN = remove_overlaps, sfs_ground_truth, sfs_overlap_fields)
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# 7. Generate tables of sum acreage by crop type for each time period
+
+# OUTPUTS: tables_crop_acreage
+
+#--------------------------------------------------------------------------------
+
+# List of months with names as associated time period
+time_periods <- list('T1' = 'February', 'T2' = 'April', 'T3' = 'July', 'T4' = 'November')
+
+# Define function to generate acreage tables
+
+summarize_crop_acreage <- function(i){
+  
+  # Create caption for table
+  quarter <- unlist(strsplit(names(sfs_ground_data)[[i]], split='_'))[2]
+  year <- unlist(strsplit(names(sfs_ground_data)[[i]], split='_'))[3]
+  caption_text <- paste('Total acreage of visited fields (by crop type),', time_periods[[quarter]], year)
+
+  # Generate an acreage table with appropriate caption
+  sfs_ground_data[[i]] %>% as.data.frame() %>% dplyr::group_by(CROP_TYPE) %>% summarise(Acres = round(sum(ACRES), 2), Frequency = n()) %>% dplyr::rename('Crop Type' = CROP_TYPE) %>% knitr::kable(caption = caption_text, row.names = FALSE) 
+} 
+
+# Generate list of tables with sum crop acreage per Ground Truth dataset
+tables_crop_acreage <- lapply(X = seq_along(sfs_ground_data), FUN = summarize_crop_acreage)
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 8. Generate extent objects
+
+# OUTPUTS: sfs_all_data, extent_max, extent_program
+
+#--------------------------------------------------------------------------------
+
+# Generate name for Program Fallow Fields data
+name_program_fallow <- paste0(params$area_of_interest, '_program_fallow')
+
+# Generate a list of all simple features used in analysis (all of those corresponding to Ground Truth fields as well as that of the Program Fallow fields, which should be added with the name: name_program_fallow)
+sfs_all_data <- rlist::list.append(sfs_ground_data, name_program_fallow = sf_program_fallow)
+
+# Define function to create extent object for a simple feature
+extract_extent <- function(X){
+  # Convert simple features to Spatial Data Frame object
+  box <- sf::as_Spatial(X)  
+  # Find extent for Spatial Data Frame object
+  raster::extent(box)
+}
+
+# Generate list of extents for all simple features
+extents_sf = lapply(sfs_all_data, extract_extent)
+
+# Extract maximum extent values considering all shapefiles used in analysis (truthed and fallowed) 
+extent_max <- do.call(raster::merge, unname(extents_sf))
+
+#--------------------------------------------------------------------------------
+
+# Generate extent of Program Fallow Fields
+extent_program <- extent(sf::as_Spatial(sf_program_fallow))
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 9. Create two lists of cropped bricks: one list cropped by maximum extent of all feature classes, the second cropped by Program Fallow Fields
+
+# OUTPUTS: bricks_cropped_max, bricks_cropped_program
+
+#--------------------------------------------------------------------------------
+
+# Create list of all files with .img extension in Images Directory
+images_list <- list.files(params$imagery_directory, pattern = '*.img$', full.names = TRUE) 
+
+# Define function to generate bricks from list of images
+generate_brick <- function(X, extent){
+  X %>% raster::brick() %>% raster::crop(., y = extent)
+}
+
+# Generate list of bricks cropped by the maximum extent of all feature classes merged 
+bricks_cropped_max <- lapply(X = images_list, FUN = generate_brick, extent = extent_max)
+bricks_cropped_max <- lapply(X = images_list, FUN = generate_brick, extent = extent_max)
+
+# Generate list of bricks cropped by the extent of Program Fallow Fields
+bricks_cropped_program <- lapply(X = images_list, FUN = generate_brick, extent = extent_program)
+bricks_cropped_program <- lapply(X = images_list, FUN = generate_brick, extent = extent_program)
+
+#--------------------------------------------------------------------------------
+
+# Define function to generate names of bricks to date of image
+generate_brick_names <- function(X){
+  split_name <- unlist(strsplit(basename(X), split='_'))
+  paste0(substr(split_name[3], 5, 6), '/', substr(split_name[3], 7, 8), '/', substr(split_name[3], 3, 4))
+}
+
+# Generate list of names of bricks
+names_bricks <- lapply(X = images_list, FUN = generate_brick_names)
+
+# Set names of bricks
+names(bricks_cropped_max) <- names_bricks
+names(bricks_cropped_program) <- names_bricks
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 10. Create list of NDVI rasters
+
+# OUTPUTS: rasters_ndvi_max_extent, rasters_ndvi_program_extent
+
+#--------------------------------------------------------------------------------
+
+# Define function to generate NDVI raster cropped to max extent
+generate_ndvi_rasters_max <- function(i){
+  ndvi <- raster::overlay(x = bricks_cropped_max[[i]][[3]], y = bricks_cropped_max[[i]][[4]], fun = function(x, y) {
+  (y-x) / (y+x)
+})
+}
+
+# Create list of NDVI rasters cropped to max extent
+rasters_ndvi_max_extent <- lapply(X = seq_along(bricks_cropped_max), FUN = generate_ndvi_rasters_max)
+
+# Define function to generate NDVI raster cropped to Program Fallow Fields
+generate_ndvi_rasters_program <- function(i){
+  ndvi <- raster::overlay(x = bricks_cropped_program[[i]][[3]], y = bricks_cropped_program[[i]][[4]], fun = function(x, y) {
+  (y-x) / (y+x)
+})
+}
+
+# Create list of NDVI rasters cropped to Program Fallow Fields
+rasters_ndvi_program_extent <- lapply(X = seq_along(bricks_cropped_program), FUN = generate_ndvi_rasters_program)
+
+# Set names of rasters
+names(rasters_ndvi_program_extent) <- names_bricks
+names(rasters_ndvi_max_extent) <- names_bricks
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# 11. Make false color map of each Sentinel image overlaid with Program Fallow Fields
+
+# OUTPUTS: cir_maps
+
+#--------------------------------------------------------------------------------
+
+# Define function to plot color-infrared images
+
+plot_cir <- function(i){
+ 
+  layer_name <- paste0('Color-Infrared Image ', names(bricks_cropped_program)[[i]] )
+  ggplot(data = sf_program_fallow) + 
+  RStoolbox::ggRGB(img = bricks_cropped_program[[i]], r = 4, g = 3, b = 2, stretch = 'hist', ggLayer = T) + xlim(extent_program[1:2]) + ylim(extent_program[3:4]) + coord_equal() +
+  geom_sf(aes(color = FIELD_KEY), size = 1.15, alpha = 0) +
+  geom_sf_text(aes(label = ID), fontface = 'bold', color = 'white', size = 2.5) +
+  scale_color_discrete(breaks = gtools::mixedsort(sf_program_fallow$FIELD_KEY)) +
+  guides(col=guide_legend(ncol = 2, title = 'Field ID Key')) +  
+  ggtitle(layer_name) + 
+  theme(plot.title = element_text(hjust = 0.5),legend.text = element_text(margin = margin(0, 0, 0, -24)),
+        legend.key.width = unit(20, 'points')) +
+    labs(x = 'Longitude', y = 'Latitude') +
+  ggspatial::annotation_scale(style = 'ticks') + 
+  ggspatial::annotation_north_arrow(location = 'br', style = north_arrow_minimal)    
+}
+
+# Apply cropped bricks to function to plot color-infrared
+cir_maps <- lapply(X = seq_along(bricks_cropped_program), FUN = plot_cir)
+
+#--------------------------------------------------------------------------------
+
+# Define function to create caption names 
+generate_cir_captions <- function(i){
+  paste('Color-infrared image', names(bricks_cropped_program)[[i]], 'overlaid with program fallow fields')
+}
+
+# Generate list of CIR map captions
+cir_caption_list <- lapply(X = seq_along(bricks_cropped_program), FUN = generate_cir_captions)
+
+# Give names to list of plots using CIR map captions list
+names(cir_maps) <- cir_caption_list
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+
+# 12. Make NDVI maps from Sentinel image overlaid with fallow fields
+
+# OUTPUTS: ndvi_maps
+
+#--------------------------------------------------------------------------------
+
+# Define function to plot NDVI rasters
+
+plot_ndvi <- function(i){
+  
+  ggplot() + 
+    geom_raster(data = rasters_ndvi_program_extent[[i]], aes(x = x, y = y, fill = layer)) +
+    coord_equal() +
+    geom_sf(data = sf_program_fallow, aes(color = FIELD_KEY), size = 1.15, alpha = 0) +
+    geom_sf_text(data = sf_program_fallow, aes(label = ID), fontface = 'bold', color = 'white', size = 2.5) +
+    scale_fill_viridis_c(name = 'NDVI', option = 'plasma', direction = -1, limits = c(-1, 1)) +
+    scale_color_discrete(breaks = gtools::mixedsort(sf_program_fallow$FIELD_KEY)) +
+    guides(col = guide_legend(ncol = 2, title = 'Field ID Key')) +  
+    ggtitle(paste('NDVI', names(rasters_ndvi_program_extent)[[i]])) + 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    labs(x = 'Longitude', y = 'Latitude') +
+    ggspatial::annotation_scale(style = 'ticks') + 
+    ggspatial::annotation_north_arrow(location = 'br', style = north_arrow_minimal) 
+}
+
+# Generate list of NDVI maps
+ndvi_maps <- lapply(X = seq_along(rasters_ndvi_program_extent), FUN = plot_ndvi)
+
+#--------------------------------------------------------------------------------
+
+#Define function to create NDVI map names 
+generate_ndvi_captions <- function(i){
+  paste('NDVI image', names(rasters_ndvi_program_extent)[[i]], 'overlaid with program fallow fields')
+}
+
+# Generate list of NDVI map names
+names_ndvi_captions <- lapply(X = seq_along(rasters_ndvi_program_extent), FUN = generate_ndvi_captions)
+
+# Give names to list of NDVI maps
+names(ndvi_maps) <- names_ndvi_captions
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 13. Calculate zonal mean by Program Fallow Fields for each NDVI raster date
+
+# OUTPUTS: dfs_zonal_ndvi_program
+
+#--------------------------------------------------------------------------------
+
+# Define function to calculate zonal mean ndvi by Program Fallow Field for each ndvi raster date
+calculate_ndvi_zonal_program <- function(i, simple_feature, field_type){
+  
+  # Calculate zonal mean NDVI value for each field 
+  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], 
+                           y = sf_program_fallow,
+                           method = 'simple',
+                           fun = mean,
+                           na.rm = T,
+                           sp = TRUE)
+  
+  data.frame(ndvi_fallowed_fields) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::mutate(FIELD_TYPE = field_type) %>% dplyr::select(Date, FIELD_ID, FIELD_TYPE, NDVI) %>% dplyr::mutate_at('FIELD_ID', as.character)
+}
+
+# Create list of data frames with zonal mean NDVI values by field
+dfs_zonal_ndvi_program <- lapply(X = seq_along(rasters_ndvi_max_extent), FUN = calculate_ndvi_zonal_program, field_type = 'Program Fallow')
+
+# Set names of dataframes within list
+names(dfs_zonal_ndvi_program) <- names_bricks
+
+```
+      
+
+```{r, eval = TRUE, include = FALSE}
+
+# 14. Zonal mean by Ground Truth Fields for each NDVI raster date
+
+# OUTPUTS: dfs_zonal_ndvi_truthed
+
+#--------------------------------------------------------------------------------
+
+# Make list of ground truth data to run sequentially alongside rasters (i.e. unlike Program Fallow Fields which were constant throughout, Ground Truth Fields changed)
+sf_ground_ordered <- list(sfs_ground_data[[1]], sfs_ground_data[[1]], sfs_ground_data[[1]], sfs_ground_data[[1]], sfs_ground_data[[2]], sfs_ground_data[[2]], sfs_ground_data[[2]], sfs_ground_data[[2]], sfs_ground_data[[2]], sfs_ground_data[[2]], sfs_ground_data[[3]], sfs_ground_data[[3]], sfs_ground_data[[3]], sfs_ground_data[[3]], sfs_ground_data[[3]], sfs_ground_data[[3]])
+
+#--------------------------------------------------------------------------------
+
+# Define function to calculate zonal mean ndvi by Program Fallow Field for each ndvi raster date
+calculate_ndvi_zonal_truthed <- function(i){
+
+  # Calculate zonal mean NDVI value for each field 
+  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], 
+                           y = sf_ground_ordered[[i]],
+                           method = 'simple',
+                           fun = mean,
+                           na.rm = T,
+                           sp = TRUE)
+
+  data.frame(ndvi_fallowed_fields) %>% `rownames<-`(NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
+} 
+
+# Create list of data frames with zonal mean NDVI values by field
+dfs_zonal_ndvi_truthed <- lapply(X = seq_along(rasters_ndvi_max_extent), FUN = calculate_ndvi_zonal_truthed)
+
+# Set names of dataframes within list
+names(dfs_zonal_ndvi_truthed) <- names_bricks
+
+```
+      
+
+```{r, eval = TRUE, include = FALSE}
+
+# 15. Create master data frame of combined NDVI values and create aggregate data frame of mean NDVI by date and field type (i.e. mean of zonal means)
+
+# OUTPUTS: df_master_zonal_ndvi, df_zonal_ndvi_program, df_master_average_ndvi
+
+#--------------------------------------------------------------------------------
+
+# Generate master NDVI dataframe combining all individual data frames within list
+df_master_zonal_ndvi <- bind_rows(dfs_zonal_ndvi_program, dfs_zonal_ndvi_truthed)
+
+# Generate concatenated NDVI dataframe for Program Fallow Fields for all dates
+df_zonal_ndvi_program <- bind_rows(dfs_zonal_ndvi_program)
+
+# Create data frame of mean NDVI aggregated by date
+df_master_average_ndvi <- df_master_zonal_ndvi %>% dplyr::group_by(Date, FIELD_TYPE) %>% dplyr::summarize(Mean_NDVI = mean(NDVI, na.rm = TRUE)) 
+
+```
+      
+            
+```{r, eval = TRUE, include = FALSE}
+
+# 16. Create compiled dataframe of all field-scale NDVI values (Program Fallow Fields and each crop type) and check normality
+
+# OUTPUTS: qq_plot
+
+#--------------------------------------------------------------------------------
+
+# Check to see if data are normally distributed
+qq_plot <- {qqnorm(df_master_zonal_ndvi$NDVI)
+qqline(df_master_zonal_ndvi$NDVI)}
+
+# We see that data are not normally distributed.
+
+# Therfore, we use non-parametic test for unpaired (independent), continuous data (Wilcoxon Rank-Sum test, a.k.a. Mann-Whitney U-test, a.k.a Wilcoxon-Matt-Whitney test).
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 17. Create line graph showing NDVI of each individual Program Fallow Field
+
+# OUTPUTS: line_zonal_ndvi_program
+
+#--------------------------------------------------------------------------------
+
+# Create column, label, for labeling individual lines (but avoiding duplicates by doing so for only one set of dates)
+df_zonal_ndvi_program <- df_zonal_ndvi_program %>% dplyr::mutate(label = ifelse(Date == names_bricks[[1]], FIELD_ID, NA_character_))
+
+# Create master line graph showing zonal NDVI values per Program Fallow Field per Date  
+line_zonal_ndvi_program <- ggplot(df_zonal_ndvi_program, aes(x = Date, y = NDVI, colour = FIELD_ID, group = FIELD_ID)) + 
+  geom_line(size = 1.5) + 
+  guides(col = guide_legend(ncol = 2, title = 'Field ID Key')) +
+  ylab('NDVI') + 
+  xlab('Date') +
+  ggtitle('NDVI Time Series') +
+    theme(plot.title = element_text(hjust = 0.5, size = 22), legend.position = 'none')
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 18. Create list of line graphs for each Program Fallow Field with its respective line highlighted
+
+# OUTPUTS: lines_zonal_ndvi_highlighted
+
+#--------------------------------------------------------------------------------
+
+# Define function to highlight one Program Fallow Field at a time
+highlight_field_zonal_ndvi <- function(X){
+  base_lines <- ggplot(df_zonal_ndvi_program, aes(x = Date, y = NDVI, colour = FIELD_ID, group = FIELD_ID)) + 
+  geom_line(size = 2) + 
+  guides(col = guide_legend(ncol = 2, title = 'Field ID Key')) +
+  ylab('NDVI') + 
+  xlab('Date') +
+  ggtitle('NDVI Time Series') +
+    theme(plot.title = element_text(hjust = 0.5, size = 22)) + 
+  gghighlight::gghighlight(FIELD_ID == X)
+}
+
+fields <- sort(unique(df_zonal_ndvi_program$FIELD_ID))
+  
+# Create list with line graph for each Program Fallow Field with its respective line highlighted
+lines_zonal_ndvi_highlighted <- lapply(X = fields, FUN = highlight_field_zonal_ndvi)
+
+# Give names to highlighted graphs
+names(lines_zonal_ndvi_highlighted) <- fields
+
+#--------------------------------------------------------------------------------
+
+# Define function to create NDVI map names 
+generate_highlighted_captions <- function(i){
+  paste('NDVI time series highlighting farm field ID', names(lines_zonal_ndvi_highlighted)[[i]])
+}
+
+# Generate list of NDVI map names
+names_ndvi_captions <- lapply(X = seq_along(lines_zonal_ndvi_highlighted), FUN = generate_highlighted_captions)
+
+# Give names to list of NDVI maps
+names(lines_zonal_ndvi_highlighted) <- names_ndvi_captions
+
+```
+
+
+```{r, eval = TRUE, include = FALSE}
+
+# 19. For each month, run Wilcoxin Rank Sum Test comparing NDVI for Program Fallow Fields against that of: 1) ground truth cropped fields (all crop types compiled), and 2) ground truth fallow fields. We expect cropped fields to be statistically different (p < 0.05), but would expect fallow fields to not be different (p > 0.05). NOTE: For this second analysis, we would only want to look at the months in which ground truthing occurred .i.e. December, April, July, and December as fallow fields may have become cropped between ground truthing.    
+ 
+# OUTPUTS: table_pvalues_cropped, table_pvalues_fallow
+
+#--------------------------------------------------------------------------------
+
+# Create table of p-Values from Wilcoxin Rank Sum Test for program fallow fields agaist ground truth cropped fields
+
+calculate_wilcoxin_cropped <- function(i){
+  dfs_zonal_ndvi_truthed[[i]] %>% dplyr::filter(FIELD_TYPE != 'Fallow') %>% dplyr::pull(NDVI) %>% wilcox.test(x = dfs_zonal_ndvi_program[[i]]$NDVI, y = ., paired = FALSE) %>% .$p.value
+}
+
+pvalues_cropped <- sapply(X = seq_along(dfs_zonal_ndvi_program), FUN = calculate_wilcoxin_cropped)
+names(pvalues_cropped) <- names(bricks_cropped_max)
+df_pvalues_cropped <- data.frame('p-Value' = pvalues_cropped) %>% format(., digits = 3)
+table_pvalues_cropped <- knitr::kable(x = df_pvalues_cropped, caption = 'p-Values of Wilcoxin Rank Sum Test comparing program fallow fields with known cropped fields', row.names = TRUE) 
+
+# Create table of p-Values from Wilcoxin Rank Sum Test for program fallow fields agaist ground truth fallow fields
+
+calculate_wilcoxin_fallow <- function(i){
+  dfs_zonal_ndvi_truthed[[i]] %>% dplyr::filter(FIELD_TYPE == 'Fallow') %>% dplyr::pull(NDVI) %>% wilcox.test(x = dfs_zonal_ndvi_program[[i]]$NDVI, y = ., paired = FALSE) %>% .$p.value
+}
+
+pvalues_fallow <- sapply(X = seq_along(dfs_zonal_ndvi_program), FUN = calculate_wilcoxin_fallow)
+names(pvalues_fallow) <- names(bricks_cropped_max)
+df_pvalues_fallow <- data.frame('p-Value' = pvalues_fallow) %>% format(., digits = 3)
+table_pvalues_fallow <- knitr::kable(x = df_pvalues_fallow, caption = 'p-Values of Wilcoxin Rank Sum Test comparing program fallow fields with known fallow fields', row.names = TRUE) 
+
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE}
+
+# 20. Make box plot showing months side by side
+
+# OUTPUTS: boxplotCropTypeNDVI, boxplotCroppedorFallowNDVI
+
+#--------------------------------------------------------------------------------
+
+# Reorder observations by month so that they appear chronologically in box plot
+
+# month_vector <- unlist(month_list)
+# df_master_zonal_ndvi$monthFactors <- factor(df_master_zonal_ndvi$Month, levels = month_vector)
+
+
+# Use mutate() and nested ifelse() to create new variable with the following three factors: 1) cropped fields (Ground Truth Fields excluding known fallow), 2) Ground Truth Fields known to be fallow, 3) Program Fallow Fields
+df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% dplyr::mutate(crop_vs_fallow = ifelse(!(FIELD_TYPE %in% c('Fallow', 'Program Fallow')), 'Crop', 
+                                                                              ifelse(FIELD_TYPE == 'Fallow', 'Fallow',
+                                                                                     ifelse(FIELD_TYPE == 'Program Fallow', 'Program Fallow', '')))) #NOTE: Spacing looks odd, but required for nested ifelse 
+
+# Define function to identify outliers Source: https://stackoverflow.com/questions/33524669/labeling-outliers-of-boxplots-in-r
+IdentifyOutliers <- function(x) {
+  return(x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+
+# Create new column, outlier, returning FIELD_ID value if it was an outlier for it's group (crop_vs_fallow and Date)
+df_master_zonal_ndvi <- df_master_zonal_ndvi %>%
+  dplyr::group_by(crop_vs_fallow, Date) %>%
+  dplyr::mutate(outlier = ifelse(IdentifyOutliers(NDVI) & crop_vs_fallow == 'Program Fallow', FIELD_ID, as.character(NA)))
+
+# Create data frame of outliers
+df_outliers <- df_master_zonal_ndvi %>% dplyr::filter(crop_vs_fallow == 'Program Fallow' & !is.na(outlier))
+
+# Create a column of NDVI values to include in boxplot (for Ground Truth Fields known to be fallow only inculde dates corresponding to ground truth dates)  
+df_master_zonal_ndvi <- dplyr::mutate(df_master_zonal_ndvi, boxplot_ndvi = ifelse(crop_vs_fallow == 'Fallow' & !(Date == '02/15/20' | Date == '05/05/20' | Date == '07/04/20'), as.numeric(NA), NDVI))
+
+# Create data frame of values to plot 
+df_ndvi_boxplot <- df_master_zonal_ndvi %>% dplyr::mutate(boxplot_ndvi = ifelse(crop_vs_fallow == 'Fallow' & !(Date == '02/15/20' | Date == '05/05/20' | Date == '07/04/20'), as.numeric(NA), NDVI)) %>% dplyr::filter( boxplot_ndvi, !is.na(boxplot_ndvi))
+
+df_ndvi_boxplot <- df_master_zonal_ndvi[!is.na(df_master_zonal_ndvi$boxplot_ndvi), ]
+
+# Create function to make boxplots with facets by month
+CreateBoxplots <- function(boxplotCategory, y, titleText, subtitleText){
+  # Graph boxplot of NDVI by crop type by month
+  boxplotCropTypeNDVI <- ggplot2::ggplot(df_ndvi_boxplot, aes_string(x = boxplotCategory, y = y, fill = boxplotCategory)) + # NOTE: aes_string required instead of aes when passing parameter from user defined function
+    geom_boxplot(alpha = 0.7) +
+    ggtitle(titleText) +
+    theme(plot.title = element_text(hjust = 0.5, size = 22),
+          plot.subtitle = element_text(hjust = 0.5, size = 18),
+          legend.position = 'bottom',
+          legend.title = element_text(face = 'bold'),
+          axis.text.x = element_text(angle = 90, hjust = 1.0, vjust = 0.25, size = 7),
+          strip.text.x = element_text(size = 8, colour = 'black')) + 
+    labs(x = 'Field Type', subtitle = paste0(subtitleText, ' \n')) + 
+    facet_grid(.~ Date) + # Breaks boxplots into frame for each month
+    guides(fill = guide_legend(title = 'Field Type',
+                               title.position = 'top',
+                               title.hjust = 0.5))
+}
+
+# Call function to make two box plots 
+
+# Boxplot with categories where each crop type is independent
+boxplotCropTypeNDVI <- CreateBoxplots('FIELD_TYPE', 'NDVI', 'Mean NDVI Values by Field Type', params$area_name)
+
+#boxplotCropTypeNDVI
+
+
+CreateBoxplotsGroupedCropped <- function(boxplotCategory, y, titleText, subtitleText){
+  # Graph boxplot of NDVI by crop type by month
+  boxplotCropTypeNDVI <- ggplot2::ggplot(df_ndvi_boxplot, aes_string(x = boxplotCategory, y = y, fill = boxplotCategory)) + # NOTE: aes_string required instead of aes when passing parameter from user defined function
+    #geom_boxplot(alpha = 0.7, outlier.colour = ifelse(is.na(df_master_zonal_ndvi$outlier), 'grey50', 'red')) + # Monkeys. Why doesn't this work
+    geom_boxplot(alpha = 0.7) +
+    geom_point(data = df_outliers, color = 'red', show.legend = FALSE) +
+    ggtitle(titleText) +
+    theme(plot.title = element_text(hjust = 0.5, size = 22),
+          plot.subtitle = element_text(hjust = 0.5, size = 18),
+          legend.position = 'bottom',
+          legend.title = element_text(face = 'bold'),
+          axis.title.x = element_blank(),
+          axis.text.x = element_blank(),
+          axis.ticks.x = element_blank(),
+          strip.text.x = element_text(size = 8, colour = 'black')) + 
+    facet_grid(.~ Date) + # Breaks boxplots into frame for each month
+    labs(x = 'Field Type', subtitle = paste0(subtitleText, ' \n')) +
+    guides(fill = guide_legend(title = 'Field Type',
+                               title.position = 'top',
+                               title.hjust = 0.5)) +
+          ggrepel::geom_text_repel(aes(label = outlier), direction = 'y', size = 2, hjust = 0, na.rm = TRUE, force = 0.5, nudge_x = 2) 
+}
+
+# Boxplot with any crop field concatenated 
+boxplotCroppedorFallowNDVI <- CreateBoxplotsGroupedCropped(boxplotCategory = 'crop_vs_fallow', y = 'NDVI', titleText = 'NDVI of Cropped vs Ground Truth Fallow vs Fallow Program Fields', subtitleText = params$area_name)
+
+#boxplotCroppedorFallowNDVI
+```
+
+
+```{r, eval = TRUE, include = TRUE, echo = FALSE}
+
+# 21. Create table NDVI values for Program Fallow fields
+
+# OUTPUTS: lines_zonal_ndvi_highlighted
+
+#--------------------------------------------------------------------------------
+
+# Create dataframe with NDVI values concatenated by date for each Program Fallow Field
+df_ndvi_program_wider <- df_zonal_ndvi_program %>% dplyr::select('Date', 'FIELD_ID', 'NDVI') %>% dplyr::mutate_if(is.numeric, round, 2) %>% tidyr::spread(key = Date, value = NDVI)
+
+# Turn dataframe into knitr table
+table_ndvi_program <- knitr::kable(x = df_ndvi_program_wider, caption = 'Bimonthly NDVI values of program fallow fields', row.names = FALSE, booktabs = TRUE, longtable = TRUE) %>% kableExtra::kable_styling(latex_options = c('striped', 'hold_position', 'repeat_header'), font_size = 7)
+
+```
+
+<!-- Print Report-->
+
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 8, fig.height = 11, fig.cap = names(cir_maps)}
+
+for(c in cir_maps){
+  print(c)
+  cat('\n\n') 
+}
+
+```
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 8, fig.height = 11, fig.cap = names(ndvi_maps)}
+
+for(m in ndvi_maps){
+  print(m)
+  cat('\n\n') 
+}
+
+```
+
+
+\blandscape
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'Boxplot of field-scale NDVI values for known cropped fields (distinguished by type) vs known ground truth fallow fields and Fallow Program Fields'}
+
+boxplotCropTypeNDVI
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'Boxplot of field-scale NDVI values for known cropped fields (aggregated together and not distinguished by type) vs known ground truth fallow fields and Fallow Program Fields (where labeled points indicate field IDs of upper limit outliers)'}
+
+boxplotCroppedorFallowNDVI
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'NDVI time series for each individual Program Fallow Field'}
+
+line_zonal_ndvi_program
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = names(lines_zonal_ndvi_highlighted)}
+
+for(h in lines_zonal_ndvi_highlighted){
+  print(h)
+  cat('\n\n') 
+}
+
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, echo = FALSE}
+
+table_ndvi_program 
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, results = 'asis'}
+
+for(t in tables_crop_acreage){
+  print(t)
+}
+
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, results = 'asis'}
+
+table_pvalues_cropped
+
+```
+
+\newpage
+
+```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, results = 'asis'}
+
+table_pvalues_fallow
+
+```
+\elandscape
+
+
+```{r, eval = FALSE, include = FALSE, warnings = FALSE, message = FALSE, echo = FALSE}
+    
+script_path <- rstudioapi::getActiveDocumentContext()$path
+rmarkdown::render(input = script_path, output_file = paste0(params$area_of_interest, '_Fallowing_Verification_Report.pdf'))
+```
+
+
+
+
+
