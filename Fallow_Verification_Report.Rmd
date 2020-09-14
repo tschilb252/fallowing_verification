@@ -41,6 +41,7 @@ params:
     input: select
     multiple: yes
   epsg: 32611
+  
 ---
 <!--- Define Headers and Footers --->
 \fancypagestyle{plain}{%
@@ -480,12 +481,7 @@ names(ndvi_maps) <- names_ndvi_captions
 calculate_ndvi_zonal_program <- function(i, simple_feature, field_type){
   
   # Calculate zonal mean NDVI value for each field 
-  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], 
-                           y = sf_program_fallow,
-                           method = 'simple',
-                           fun = mean,
-                           na.rm = T,
-                           sp = TRUE)
+  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], y = sf_program_fallow, method = 'simple', fun = mean, na.rm = T, sp = TRUE)
   
   data.frame(ndvi_fallowed_fields) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::mutate(FIELD_TYPE = field_type) %>% dplyr::select(Date, FIELD_ID, FIELD_TYPE, NDVI) %>% dplyr::mutate_at('FIELD_ID', as.character)
 }
@@ -516,12 +512,7 @@ sf_ground_ordered <- list(sfs_ground_data[[1]], sfs_ground_data[[1]], sfs_ground
 calculate_ndvi_zonal_truthed <- function(i){
 
   # Calculate zonal mean NDVI value for each field 
-  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], 
-                           y = sf_ground_ordered[[i]],
-                           method = 'simple',
-                           fun = mean,
-                           na.rm = T,
-                           sp = TRUE)
+  ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], y = sf_ground_ordered[[i]], method = 'simple',fun = mean, na.rm = T, sp = TRUE)
 
   data.frame(ndvi_fallowed_fields) %>% `rownames<-`(NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
 } 
@@ -552,6 +543,11 @@ df_zonal_ndvi_program <- bind_rows(dfs_zonal_ndvi_program)
 # Create data frame of mean NDVI aggregated by date
 df_master_average_ndvi <- df_master_zonal_ndvi %>% dplyr::group_by(Date, FIELD_TYPE) %>% dplyr::summarize(Mean_NDVI = mean(NDVI, na.rm = TRUE)) 
 
+# Change Date variable to factor, create crop_vs_fallow variable (same as FIELD_TYPE except all crops are given same value, Crop)
+df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% dplyr::mutate(crop_vs_fallow = ifelse(!(FIELD_TYPE %in% c('Fallow', 'Program Fallow')), 'Crop', 
+                                                                              ifelse(FIELD_TYPE == 'Fallow', 'Fallow',
+                                                                                     ifelse(FIELD_TYPE == 'Program Fallow', 'Program Fallow', '')))) #NOTE: Spacing looks odd, but required for nested ifelse 
+
 ```
       
             
@@ -569,7 +565,7 @@ qqline(df_master_zonal_ndvi$NDVI)}
 
 # We see that data are not normally distributed.
 
-# Therfore, we use non-parametic test for unpaired (independent), continuous data (Wilcoxon Rank-Sum test, a.k.a. Mann-Whitney U-test, a.k.a Wilcoxon-Matt-Whitney test).
+# If data are not normally distributed, we use non-parametic test for unpaired (independent), continuous data (Wilcoxon Rank-Sum test, a.k.a. Mann-Whitney U-test, a.k.a Wilcoxon-Matt-Whitney test).
 
 ```
 
@@ -674,24 +670,14 @@ table_pvalues_fallow <- knitr::kable(x = df_pvalues_fallow, caption = 'p-Values 
 ```
 
 
-```{r, eval = TRUE, include = FALSE, echo = FALSE}
 
-# 20. Make box plot showing months side by side
+```{r, eval = TRUE, include = FALSE}
 
-# OUTPUTS: boxplotCropTypeNDVI, boxplotCroppedorFallowNDVI
+# 20. For each month, run Wilcoxin Rank Sum Test comparing NDVI for Program Fallow Fields against that of: 1) ground truth cropped fields (all crop types compiled), and 2) ground truth fallow fields. We expect cropped fields to be statistically different (p < 0.05), but would expect fallow fields to not be different (p > 0.05). NOTE: For this second analysis, we would only want to look at the months in which ground truthing occurred .i.e. December, April, July, and December as fallow fields may have become cropped between ground truthing.    
+ 
+# OUTPUTS: table_pvalues_cropped, table_pvalues_fallow
 
 #--------------------------------------------------------------------------------
-
-# Reorder observations by month so that they appear chronologically in box plot
-
-# month_vector <- unlist(month_list)
-# df_master_zonal_ndvi$monthFactors <- factor(df_master_zonal_ndvi$Month, levels = month_vector)
-
-
-# Use mutate() and nested ifelse() to create new variable with the following three factors: 1) cropped fields (Ground Truth Fields excluding known fallow), 2) Ground Truth Fields known to be fallow, 3) Program Fallow Fields
-df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% dplyr::mutate(crop_vs_fallow = ifelse(!(FIELD_TYPE %in% c('Fallow', 'Program Fallow')), 'Crop', 
-                                                                              ifelse(FIELD_TYPE == 'Fallow', 'Fallow',
-                                                                                     ifelse(FIELD_TYPE == 'Program Fallow', 'Program Fallow', '')))) #NOTE: Spacing looks odd, but required for nested ifelse 
 
 # Define function to identify outliers Source: https://stackoverflow.com/questions/33524669/labeling-outliers-of-boxplots-in-r
 IdentifyOutliers <- function(x) {
@@ -714,40 +700,22 @@ df_ndvi_boxplot <- df_master_zonal_ndvi %>% dplyr::mutate(boxplot_ndvi = ifelse(
 
 df_ndvi_boxplot <- df_master_zonal_ndvi[!is.na(df_master_zonal_ndvi$boxplot_ndvi), ]
 
-# Create function to make boxplots with facets by month
-CreateBoxplots <- function(boxplotCategory, y, titleText, subtitleText){
-  # Graph boxplot of NDVI by crop type by month
-  boxplotCropTypeNDVI <- ggplot2::ggplot(df_ndvi_boxplot, aes_string(x = boxplotCategory, y = y, fill = boxplotCategory)) + # NOTE: aes_string required instead of aes when passing parameter from user defined function
+```
+
+
+```{r, eval = TRUE, include = FALSE, echo = FALSE}
+
+# 21. Generate boxplots of NDVI by crop type (ungrouped and grouped)
+
+# OUTPUTS: boxplot_ungrouped, boxplot_grouped
+
+#--------------------------------------------------------------------------------
+
+# Define function to generate boxplots
+generate_boxplot <- function(x_variable, y_variable, title_text, subtitle_text, label_outliers){
+  ggplot2::ggplot(df_ndvi_boxplot, aes_string(x = x_variable, y = y_variable, fill = x_variable)) + 
     geom_boxplot(alpha = 0.7) +
-    ggtitle(titleText) +
-    theme(plot.title = element_text(hjust = 0.5, size = 22),
-          plot.subtitle = element_text(hjust = 0.5, size = 18),
-          legend.position = 'bottom',
-          legend.title = element_text(face = 'bold'),
-          axis.text.x = element_text(angle = 90, hjust = 1.0, vjust = 0.25, size = 7),
-          strip.text.x = element_text(size = 8, colour = 'black')) + 
-    labs(x = 'Field Type', subtitle = paste0(subtitleText, ' \n')) + 
-    facet_grid(.~ Date) + # Breaks boxplots into frame for each month
-    guides(fill = guide_legend(title = 'Field Type',
-                               title.position = 'top',
-                               title.hjust = 0.5))
-}
-
-# Call function to make two box plots 
-
-# Boxplot with categories where each crop type is independent
-boxplotCropTypeNDVI <- CreateBoxplots('FIELD_TYPE', 'NDVI', 'Mean NDVI Values by Field Type', params$area_name)
-
-#boxplotCropTypeNDVI
-
-
-CreateBoxplotsGroupedCropped <- function(boxplotCategory, y, titleText, subtitleText){
-  # Graph boxplot of NDVI by crop type by month
-  boxplotCropTypeNDVI <- ggplot2::ggplot(df_ndvi_boxplot, aes_string(x = boxplotCategory, y = y, fill = boxplotCategory)) + # NOTE: aes_string required instead of aes when passing parameter from user defined function
-    #geom_boxplot(alpha = 0.7, outlier.colour = ifelse(is.na(df_master_zonal_ndvi$outlier), 'grey50', 'red')) + # Monkeys. Why doesn't this work
-    geom_boxplot(alpha = 0.7) +
-    geom_point(data = df_outliers, color = 'red', show.legend = FALSE) +
-    ggtitle(titleText) +
+    ggtitle(title_text) +
     theme(plot.title = element_text(hjust = 0.5, size = 22),
           plot.subtitle = element_text(hjust = 0.5, size = 18),
           legend.position = 'bottom',
@@ -756,24 +724,25 @@ CreateBoxplotsGroupedCropped <- function(boxplotCategory, y, titleText, subtitle
           axis.text.x = element_blank(),
           axis.ticks.x = element_blank(),
           strip.text.x = element_text(size = 8, colour = 'black')) + 
-    facet_grid(.~ Date) + # Breaks boxplots into frame for each month
-    labs(x = 'Field Type', subtitle = paste0(subtitleText, ' \n')) +
+    facet_grid(.~ Date) + 
+    labs(x = 'Field Type', subtitle = paste0(subtitle_text, ' \n')) +
     guides(fill = guide_legend(title = 'Field Type',
                                title.position = 'top',
                                title.hjust = 0.5)) +
-          ggrepel::geom_text_repel(aes(label = outlier), direction = 'y', size = 2, hjust = 0, na.rm = TRUE, force = 0.5, nudge_x = 2) 
+    if(label_outliers == TRUE){
+      list(geom_point(data = df_outliers, color = 'red', show.legend = FALSE), ggrepel::geom_text_repel(aes(label = outlier), direction = 'y', size = 2, hjust = 0, na.rm = TRUE, force = 0.5, nudge_x = 2))
+      } 
 }
 
-# Boxplot with any crop field concatenated 
-boxplotCroppedorFallowNDVI <- CreateBoxplotsGroupedCropped(boxplotCategory = 'crop_vs_fallow', y = 'NDVI', titleText = 'NDVI of Cropped vs Ground Truth Fallow vs Fallow Program Fields', subtitleText = params$area_name)
-
-#boxplotCroppedorFallowNDVI
+# Generate boxplots
+boxplot_crops_distinguished <- generate_boxplot(x_variable = 'FIELD_TYPE', y_variable = 'NDVI', title_text = 'Mean NDVI Values by Field Type', subtitle_text = params$area_name, label_outliers = FALSE)
+boxplot_crops_aggregated <- generate_boxplot(x_variable = 'crop_vs_fallow', y_variable = 'NDVI', title_text = 'NDVI by Field Type (Crop Categories Consolidated)', subtitle_text = params$area_name, label_outliers = TRUE)
 ```
 
 
 ```{r, eval = TRUE, include = TRUE, echo = FALSE}
 
-# 21. Create table NDVI values for Program Fallow fields
+# 22. Create table NDVI values for Program Fallow fields
 
 # OUTPUTS: lines_zonal_ndvi_highlighted
 
@@ -813,14 +782,14 @@ for(m in ndvi_maps){
 
 ```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'Boxplot of field-scale NDVI values for known cropped fields (distinguished by type) vs known ground truth fallow fields and Fallow Program Fields'}
 
-boxplotCropTypeNDVI
+boxplot_crops_distinguished
 ```
 
 \newpage
 
 ```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'Boxplot of field-scale NDVI values for known cropped fields (aggregated together and not distinguished by type) vs known ground truth fallow fields and Fallow Program Fields (where labeled points indicate field IDs of upper limit outliers)'}
 
-boxplotCroppedorFallowNDVI
+boxplot_crops_aggregated
 ```
 
 \newpage
