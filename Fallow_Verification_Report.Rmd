@@ -33,11 +33,13 @@ params:
   shp_program: ''
   identifier: ''
   list_shp_ground: 
-    value: ''
-    choices:
-    - ''
-    - ''
-    - ''
+    value: []
+    choices: []
+    input: select
+    multiple: yes
+  list_truthing_dates:
+    value: []
+    choices: []
     input: select
     multiple: yes
   epsg: 32611
@@ -62,12 +64,9 @@ Parameters:
   imagery_directory: Path/to/directory/with/Sentinel-2/imagery
   shp_program: Path/to/shapefile/of/program/fallow/fields
   identifier: name of attribute table field within shp_program that is the unique identifier of fields
-  list_shp_ground: Path/to/shapefile/of/ground/truth/fields
-    value: one must be at least on listed here
-    choices: 
-    input: select
-    multiple: yes
-  epsg: EPSG code to which data will be re-projected to
+  list_shp_ground: Give paths to ground truth shapefiles
+  list_truthing_dates: Give string list with MM/DD/YY format of imagery dates that most closely match ground truth dates
+  epsg: EPSG code to which data will be re-projected
   
 Requirements:
   - my_header.tex should be saved in same directory as this script
@@ -89,7 +88,7 @@ How to run render this report:
 
 
 
-```{r test, child = "Fallow_Verification_Internal_Knit_Parameters_and_Text.Rmd", eval=TRUE}
+```{r test, child = 'Fallow_Verification_Internal_Knit_Parameters_and_Text.Rmd', eval=TRUE}
 
 # 0. Read in report text from separate RMarkdown document
 
@@ -255,7 +254,7 @@ summarize_crop_acreage <- function(i){
   caption_text <- paste('Total acreage of visited fields (by crop type),', time_periods[[quarter]], year)
 
   # Generate an acreage table with appropriate caption
-  sfs_ground_data[[i]] %>% as.data.frame() %>% dplyr::group_by(CROP_TYPE) %>% summarise(Acres = round(sum(ACRES), 2), Frequency = n()) %>% dplyr::rename('Crop Type' = CROP_TYPE) %>% knitr::kable(caption = caption_text, row.names = FALSE) 
+  sfs_ground_data[[i]] %>% as.data.frame() %>% dplyr::mutate('Crop' = df_crop_key$crop_name[match(CROP_TYPE, df_crop_key$crop_code)])%>% dplyr::group_by(Crop) %>% summarise(Acres = round(sum(ACRES), 2), Frequency = n()) %>% knitr::kable(caption = caption_text, row.names = FALSE)   
 } 
 
 # Generate list of tables with sum crop acreage per Ground Truth dataset
@@ -514,7 +513,7 @@ calculate_ndvi_zonal_truthed <- function(i){
   # Calculate zonal mean NDVI value for each field 
   ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], y = sf_ground_ordered[[i]], method = 'simple',fun = mean, na.rm = T, sp = TRUE)
 
-  data.frame(ndvi_fallowed_fields) %>% `rownames<-`(NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
+  data.frame(ndvi_fallowed_fields) %>% `rownames <-` (NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
 } 
 
 # Create list of data frames with zonal mean NDVI values by field
@@ -528,25 +527,32 @@ names(dfs_zonal_ndvi_truthed) <- names_bricks
 
 ```{r, eval = TRUE, include = FALSE}
 
-# 15. Create master data frame of combined NDVI values and create aggregate data frame of mean NDVI by date and field type (i.e. mean of zonal means)
+# 15. Create master or aggregated data frames of NDVI values 
 
-# OUTPUTS: df_master_zonal_ndvi, df_zonal_ndvi_program, df_master_average_ndvi
+# OUTPUTS: df_zonal_ndvi_program, df_master_zonal_ndvi, df_master_average_ndvi, df_ndvi_boxplot
 
 #--------------------------------------------------------------------------------
 
-# Generate master NDVI dataframe combining all individual data frames within list
-df_master_zonal_ndvi <- bind_rows(dfs_zonal_ndvi_program, dfs_zonal_ndvi_truthed)
-
-# Generate concatenated NDVI dataframe for Program Fallow Fields for all dates
+# Generate dataframe of all NDVI values for each Program Fallow Field for each date
 df_zonal_ndvi_program <- bind_rows(dfs_zonal_ndvi_program)
 
-# Create data frame of mean NDVI aggregated by date
+#--------------------------------------------------------------------------------
+
+# Generate master dataframe of all NDVI values for each field (either Program Fallow or Ground Truth) for each date
+df_master_zonal_ndvi <- bind_rows(dfs_zonal_ndvi_program, dfs_zonal_ndvi_truthed)
+
+# Change Date variable to factor; create crop_vs_fallow variable (same as FIELD_TYPE except all crops are given same value, Crop)
+df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% dplyr::mutate(crop_vs_fallow = ifelse(!(FIELD_TYPE %in% c('Fallow', 'Program Fallow')), 'Crop', ifelse(FIELD_TYPE == 'Fallow', 'Fallow', ifelse(FIELD_TYPE == 'Program Fallow', 'Program Fallow', ''))))
+
+#--------------------------------------------------------------------------------
+
+# Create master data frame of mean NDVI aggregated by date
 df_master_average_ndvi <- df_master_zonal_ndvi %>% dplyr::group_by(Date, FIELD_TYPE) %>% dplyr::summarize(Mean_NDVI = mean(NDVI, na.rm = TRUE)) 
 
-# Change Date variable to factor, create crop_vs_fallow variable (same as FIELD_TYPE except all crops are given same value, Crop)
-df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% dplyr::mutate(crop_vs_fallow = ifelse(!(FIELD_TYPE %in% c('Fallow', 'Program Fallow')), 'Crop', 
-                                                                              ifelse(FIELD_TYPE == 'Fallow', 'Fallow',
-                                                                                     ifelse(FIELD_TYPE == 'Program Fallow', 'Program Fallow', '')))) #NOTE: Spacing looks odd, but required for nested ifelse 
+#--------------------------------------------------------------------------------
+
+# Create dataframe of all NDVI values to include in boxplot (same as df_master_zonal_ndvi except eliminating those for Ground Truth Fields known to be fallow for dates not corresponding to ground truth dates)  
+df_ndvi_boxplot <- df_master_zonal_ndvi %>% dplyr::mutate(boxplot_ndvi = ifelse(crop_vs_fallow == 'Fallow' & !(Date %in% params$list_truthing_dates), as.numeric(NA), NDVI)) %>% dplyr::filter( boxplot_ndvi, !is.na(boxplot_ndvi))
 
 ```
       
@@ -562,8 +568,6 @@ df_master_zonal_ndvi <- df_master_zonal_ndvi  %>% mutate_at('Date', factor) %>% 
 # Check to see if data are normally distributed
 qq_plot <- {qqnorm(df_master_zonal_ndvi$NDVI)
 qqline(df_master_zonal_ndvi$NDVI)}
-
-# We see that data are not normally distributed.
 
 # If data are not normally distributed, we use non-parametic test for unpaired (independent), continuous data (Wilcoxon Rank-Sum test, a.k.a. Mann-Whitney U-test, a.k.a Wilcoxon-Matt-Whitney test).
 
@@ -656,6 +660,8 @@ names(pvalues_cropped) <- names(bricks_cropped_max)
 df_pvalues_cropped <- data.frame('p-Value' = pvalues_cropped) %>% format(., digits = 3)
 table_pvalues_cropped <- knitr::kable(x = df_pvalues_cropped, caption = 'p-Values of Wilcoxin Rank Sum Test comparing program fallow fields with known cropped fields', row.names = TRUE) 
 
+#--------------------------------------------------------------------------------
+
 # Create table of p-Values from Wilcoxin Rank Sum Test for program fallow fields agaist ground truth fallow fields
 
 calculate_wilcoxin_fallow <- function(i){
@@ -673,9 +679,9 @@ table_pvalues_fallow <- knitr::kable(x = df_pvalues_fallow, caption = 'p-Values 
 
 ```{r, eval = TRUE, include = FALSE}
 
-# 20. For each month, run Wilcoxin Rank Sum Test comparing NDVI for Program Fallow Fields against that of: 1) ground truth cropped fields (all crop types compiled), and 2) ground truth fallow fields. We expect cropped fields to be statistically different (p < 0.05), but would expect fallow fields to not be different (p > 0.05). NOTE: For this second analysis, we would only want to look at the months in which ground truthing occurred .i.e. December, April, July, and December as fallow fields may have become cropped between ground truthing.    
+# 20. Create data frame of outliers    
  
-# OUTPUTS: table_pvalues_cropped, table_pvalues_fallow
+# OUTPUTS: df_outliers, df_ndvi_boxplot
 
 #--------------------------------------------------------------------------------
 
@@ -691,14 +697,6 @@ df_master_zonal_ndvi <- df_master_zonal_ndvi %>%
 
 # Create data frame of outliers
 df_outliers <- df_master_zonal_ndvi %>% dplyr::filter(crop_vs_fallow == 'Program Fallow' & !is.na(outlier))
-
-# Create a column of NDVI values to include in boxplot (for Ground Truth Fields known to be fallow only inculde dates corresponding to ground truth dates)  
-df_master_zonal_ndvi <- dplyr::mutate(df_master_zonal_ndvi, boxplot_ndvi = ifelse(crop_vs_fallow == 'Fallow' & !(Date == '02/15/20' | Date == '05/05/20' | Date == '07/04/20'), as.numeric(NA), NDVI))
-
-# Create data frame of values to plot 
-df_ndvi_boxplot <- df_master_zonal_ndvi %>% dplyr::mutate(boxplot_ndvi = ifelse(crop_vs_fallow == 'Fallow' & !(Date == '02/15/20' | Date == '05/05/20' | Date == '07/04/20'), as.numeric(NA), NDVI)) %>% dplyr::filter( boxplot_ndvi, !is.na(boxplot_ndvi))
-
-df_ndvi_boxplot <- df_master_zonal_ndvi[!is.na(df_master_zonal_ndvi$boxplot_ndvi), ]
 
 ```
 
@@ -730,13 +728,14 @@ generate_boxplot <- function(x_variable, y_variable, title_text, subtitle_text, 
                                title.position = 'top',
                                title.hjust = 0.5)) +
     if(label_outliers == TRUE){
-      list(geom_point(data = df_outliers, color = 'red', show.legend = FALSE), ggrepel::geom_text_repel(aes(label = outlier), direction = 'y', size = 2, hjust = 0, na.rm = TRUE, force = 0.5, nudge_x = 2))
+      list(geom_point(data = df_outliers, color = 'red', show.legend = FALSE), ggrepel::geom_text_repel(aes(label = outlier), size = 2, hjust = 1, na.rm = TRUE, nudge_x = -0.4))
       } 
 }
 
 # Generate boxplots
 boxplot_crops_distinguished <- generate_boxplot(x_variable = 'FIELD_TYPE', y_variable = 'NDVI', title_text = 'Mean NDVI Values by Field Type', subtitle_text = params$area_name, label_outliers = FALSE)
 boxplot_crops_aggregated <- generate_boxplot(x_variable = 'crop_vs_fallow', y_variable = 'NDVI', title_text = 'NDVI by Field Type (Crop Categories Consolidated)', subtitle_text = params$area_name, label_outliers = TRUE)
+
 ```
 
 
