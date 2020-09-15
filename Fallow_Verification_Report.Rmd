@@ -513,9 +513,9 @@ calculate_ndvi_zonal_truthed <- function(i){
   # Calculate zonal mean NDVI value for each field 
   ndvi_fallowed_fields <- raster::extract(x = rasters_ndvi_max_extent[[i]], y = sf_ground_ordered[[i]], method = 'simple',fun = mean, na.rm = T, sp = TRUE)
 
-  data.frame(ndvi_fallowed_fields) %>% `rownames <-` (NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
+  data.frame(ndvi_fallowed_fields) %>% `rownames<-`(NULL) %>% dplyr::rename(FIELD_ID = FIELD_ID) %>% dplyr::rename(NDVI = layer) %>% dplyr::mutate(Date = names(rasters_ndvi_max_extent[i])) %>% dplyr::select(Date, FIELD_ID, CROP_TYPE, NDVI) %>% dplyr::rename(FIELD_TYPE = CROP_TYPE) %>% dplyr::mutate('FIELD_TYPE' = df_crop_key$crop_name[match(FIELD_TYPE, df_crop_key$crop_code)]) %>% dplyr::mutate_at(c('FIELD_ID', 'FIELD_TYPE'), as.character)
 } 
-
+   
 # Create list of data frames with zonal mean NDVI values by field
 dfs_zonal_ndvi_truthed <- lapply(X = seq_along(rasters_ndvi_max_extent), FUN = calculate_ndvi_zonal_truthed)
 
@@ -728,7 +728,7 @@ generate_boxplot <- function(x_variable, y_variable, title_text, subtitle_text, 
                                title.position = 'top',
                                title.hjust = 0.5)) +
     if(label_outliers == TRUE){
-      list(geom_point(data = df_outliers, color = 'red', show.legend = FALSE), ggrepel::geom_text_repel(aes(label = outlier), size = 2, hjust = 1, na.rm = TRUE, nudge_x = -0.4))
+      list(geom_point(data = df_outliers, color = 'red', show.legend = FALSE), ggrepel::geom_text_repel(data = df_outliers, aes(label = outlier), force = 0.5, size = 2.25, hjust = 0, na.rm = TRUE, direction = 'y'))
       } 
 }
 
@@ -782,6 +782,7 @@ for(m in ndvi_maps){
 ```{r, eval = TRUE, include = TRUE, warnings = FALSE, message = FALSE, echo = FALSE, fig.width = 12, fig.height = 8, fig.cap = 'Boxplot of field-scale NDVI values for known cropped fields (distinguished by type) vs known ground truth fallow fields and Fallow Program Fields'}
 
 boxplot_crops_distinguished
+
 ```
 
 \newpage
