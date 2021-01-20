@@ -11,15 +11,18 @@
 
 # Notes:            This script is intended to be used for a Script Tool within ArcGIS Pro; it is not intended as a stand-alone script.
 
-# Description:      This tool generates shapefile and raster subsets of a field border shapefile and satellite image(s), respectively.  
+# Description:      This tool calculates the following for each agricultural field: NDVI for each image, delta NDVI between each image, most recent harvest date, and fallow status. There is an assumption that Sentinel- 2 imagery (composited bands 2, 3, 4, 8) with the following nomenclature is used: *_*_YYYYMMDD_*B2-4_8.img'.
 
 ################################################################################################
 ################################################################################################
 
 # This script will:
 # 0. Set up
-# 1. Subset area of interest
-# 2. Calculate NDVI
+# 1. Calculate NDVI
+# 2. Calculate delta NDVI for time periods (excluding first date)
+# 3. Identify most recent harvest date
+# 4. Identify fallow fields
+# 5. Join pandas dataframe to Ground Truth Feature Class
 
 #----------------------------------------------------------------------------------------------
 
@@ -79,12 +82,16 @@ imgery_list = []
 # Create list of composite rasters
 imgery_list = glob.glob('*_B2-4_8.img')
 
+# Function to calculate zonal mean NDVI per agricultural field
+
 def calculate_ndvi():
 
     # Create empty lists to which dates will later be added
     date_list = []
     
     for i in imgery_list:
+        
+        # Extract date from image file name
         image_name = os.path.basename(i) 
         image_name_chunks = image_name.split('_')
         image_date = image_name_chunks[2]
@@ -92,13 +99,14 @@ def calculate_ndvi():
         # Clip image by subset area of interest      
         outExtractByMask = arcpy.sa.ExtractByMask(in_raster = i, in_mask_data = ground_truth_feature_class)
         
-        # Save extracted image to memory
+        # Assign variable to clipped image
         output = r'in_memory\subset_raster_' + image_date
         
         # Check for pre-existing raster and delete
         if arcpy.Exists(output):
             arcpy.Delete_management(in_data = output)
         
+        # Save extracted image to memory        
         outExtractByMask.save(output)
        
         # Read in NIR and Red bands
@@ -123,7 +131,7 @@ def calculate_ndvi():
         if arcpy.Exists(majority_table):
             arcpy.Delete_management(in_data = majority_table)
         
-        # Generat zenal statistics (mean) table
+        # Generat zonal statistics (mean) table
         arcpy.sa.ZonalStatisticsAsTable(in_zone_data = ground_truth_feature_class, zone_field = 'FIELD_ID', in_value_raster = ndvi_output, out_table = majority_table, statistics_type = 'MEAN')
 
         # Check for pre-existing attribute table field and delete        
@@ -144,10 +152,9 @@ calculate_ndvi()
 
 #--------------------------------------------------------------------------
 
-# 2. Calculate delta NDVI for time periods (save for first)
+# 2. Calculate delta NDVI for time periods (excluding first date)
 
 # Create list of attribute table fields to include in numpy array (ndvi* and FIELD_ID)
-
 include_fields = [field.name for field in arcpy.ListFields(dataset = ground_truth_feature_class, wild_card = 'ndvi*')]
 include_fields.insert(0, 'FIELD_ID')
 
@@ -172,7 +179,8 @@ df_delta_ndvi.dropna(axis = 1, how = 'all', inplace = True)
 #--------------------------------------------------------------------------
 
 # 3. Identify most recent harvest date
-   
+
+# Function to identify most recent harvest date   
 def get_recent_harvest(v):
     s = pandas.Series(v < -0.15)
     array = s.where(s == True).last_valid_index()
@@ -214,9 +222,10 @@ dates_recent = [r for r in dates_as_integers if r >= date_month_ago]
 columns_ndvi_recent = ['ndvi_' + str(n) for n in dates_recent]
 
 # Label those fields with NDVI < 0.2 for the past 30 days as Fallow
-df_ndvi['Fallow_Status'] = numpy.where((df_ndvi[columns_ndvi_recent] < 0.2).all(axis = 1), 'Fallow', 'Not Fallow')
+df_ndvi['Fallow_Status'] = numpy.where((df_ndvi[columns_ndvi_recent] < 0.2).all(axis = 1), 'Fallow', 'Not_Fallow')
 numpy.where(())
 
+# Print number of fallow fields
 len(df_ndvi[df_ndvi.Fallow_Status == 'Fallow'])
 
 # Override fallow label for exceptions including fields whose most recent NDVI > 0.14 or one of the two most recent delta NDVIs are > 0.02
@@ -229,24 +238,29 @@ for index, row in df_ndvi.iterrows():
     if  df_ndvi.loc[index, ultima_ndvi] > 0.14 and (df_ndvi.loc[index, ultima_delta] > 0.02 or df_ndvi.loc[index, penultima_delta] > 0.02):
         df_ndvi.loc[index, 'Fallow_Status'] = 'Not_Fallow'
 
-len(df_ndvi[df_ndvi.Fallow_Status == 'Fallow'])
+# Print number of fallow fields after culling
+print(len(df_ndvi[df_ndvi.Fallow_Status == 'Fallow']))
         
 #--------------------------------------------------------------------------
 
 # 5. Join pandas dataframe to Ground Truth feature class
+
+# Create list of column to join
 columns_all = list(df_ndvi.columns.values)
 columns_non_ndvi = [c for c in columns_all if c not in columns_ndvi]
+
+# Create copy of NDVI dataframe, keeping only those to join
 df_join = df_ndvi[columns_non_ndvi]
 
+# Convert FIELD_ID index back to column
 df_join['FIELD_ID'] = df_join.index
 
+# Join dataframe to feature class
 output_array = numpy.array(numpy.rec.fromrecords(df_join))
 array_names = df_join.dtypes.index.tolist()
 output_array.dtype.names = tuple(array_names)
-
 arcpy.da.ExtendTable(in_table = ground_truth_feature_class, table_match_field = 'FIELD_ID', in_array = output_array, array_match_field = 'FIELD_ID')
 
- 
 #_______________________________________________________________________________
 
 # TTDL
@@ -264,6 +278,7 @@ arcpy.da.ExtendTable(in_table = ground_truth_feature_class, table_match_field = 
 # Easier to make new data frame of recent NDVI or to only consider certain ones?
 # How to deal with NA values in Harvest date in order to do comparison
 # Use numpy to raster and do ndvi calculations with numpy or pandas
-# Figure work around for error of extending table if fields already exist. In the case of delta_ndvi*, if this is being re-run it will cause error.
+# Figure work around for error of extending table if fields already exist. In the case of delta_ndvi*, if this is being re-run it will cause error
 # Find some way to test if was recently watered using NDWI before increase in delta NDVI and set as not fallow 
 # Catch emergent fields with low NDVI and low delta NDVI with heterogeneity index
+# Sort NDVI columns chronologically
