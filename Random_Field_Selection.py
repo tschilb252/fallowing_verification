@@ -10,7 +10,7 @@
 
 # Requires:         Pyhton 3.x
 
-# Notes:            This script is intended to be used as a stand-alone script.
+# Notes:            This script is intended to be used as a stand-alone script
 
 # Description:      This script allows a user to randomly select fields participating in a fallowing program for on the ground visual inspection.
                   
